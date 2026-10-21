@@ -65,6 +65,14 @@
   .op.abandon, .op.lock-expired { color: var(--warn); } .op.dead-letter, .op.handler-error { color: var(--bad); }
   .op.duplicate, .op.replay { color: #7A2FB5; }
   .bad { color: var(--bad); font-weight: 600; }
+  .oc { display: inline-block; min-width: 92px; font-weight: 700; }
+  .oc.sent, .oc.accepted { color: var(--good); } .oc.skipped { color: var(--muted); } .oc.duplicate { color: #7A2FB5; }
+  .oc.failed, .oc.rejected { color: var(--bad); } .oc.circuit-open, .oc.quarantined { color: var(--warn); }
+  .prov { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
+  .prov:first-child { border-top: 0; padding-top: 0; }
+  .prov code { display: block; font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; color: var(--muted); overflow-wrap: anywhere; }
+  .circuit { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; margin-right: 6px; background: var(--good-bg); color: var(--good); }
+  .circuit.open { background: var(--bad-bg); color: var(--bad); } .circuit.half-open { background: var(--warn-bg); color: var(--warn); }
   .dl { border: 1px solid #EBB5B0; background: var(--bad-bg); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; font-size: 13px; }
   .empty { color: var(--muted); font-size: 13px; }
 </style>
@@ -128,12 +136,37 @@
         <div class="hint">Submit, then press Cancel on the claim while it is Approved.</div>
       </div>
     </section>
+
+    <section>
+      <h2>Connectors: the edge</h2>
+      <div class="card"><h3>Inbound · the garage calls our webhook</h3>
+        <label class="toggle"><input type="checkbox" data-fault="garageDuplicateWebhooks"> Garage sends every webhook twice</label>
+        <div class="row" style="margin-top:4px">
+          <button class="ghost small" onclick="setFault('garageCorruptSignatureOnce',true)">Next webhook: bad signature</button>
+          <button class="ghost small" onclick="post('/api/inject/webhook',{kind:'unknown-job'})">Webhook for unknown job</button>
+          <button class="ghost small" onclick="post('/api/inject/webhook',{kind:'malformed'})">Malformed webhook</button>
+        </div>
+      </div>
+      <div class="card"><h3>Outbound · rules and partners</h3>
+        <label class="toggle"><input type="checkbox" data-fault="garageDown"> Garage API down</label>
+        <label class="toggle"><input type="checkbox" data-fault="reinsurerDown"> Reinsurer API down</label>
+        <div class="hint">Claims of £5,000 or more are reported to the reinsurer. Confirmed fraud goes to the fraud bureau. Try a £6,500 claim with the reinsurer down.</div>
+      </div>
+    </section>
   </div>
 
   <div>
     <section>
       <h2>Claims <span class="t" id="claim-count"></span></h2>
       <div id="claims"><div class="empty">No claims yet. Submit one.</div></div>
+    </section>
+    <section>
+      <h2>Connector log <span class="t">(every decision at the edge)</span></h2>
+      <div id="circuits" style="margin-bottom:8px"></div>
+      <div class="log" id="connlog" style="max-height:280px"></div>
+    </section>
+    <section>
+      <h2>What the outside world received</h2><div id="providers"></div>
     </section>
     <section>
       <h2>Payments ledger</h2><div id="ledger"></div>
@@ -214,6 +247,18 @@ function render(s) {
   document.getElementById('notifications').innerHTML = s.notifications.length
     ? s.notifications.slice().reverse().map((n) => `<div style="margin:3px 0"><span class="t">${clock(n.at)}</span> <b>${esc(n.claimId)}</b> ${esc(n.text)}</div>`).join('')
     : '<div class="empty">No emails sent.</div>';
+
+  const cx = s.connectors;
+  document.getElementById('circuits').innerHTML = cx.circuits.length
+    ? cx.circuits.map((c) => `<span class="circuit ${c.state}" title="${esc(c.connector)}">${esc(c.target)}: circuit ${c.state}</span>`).join('')
+    : '<span class="t">No outbound calls yet.</span>';
+  document.getElementById('connlog').innerHTML = cx.log.length
+    ? cx.log.slice().reverse().map((l) => `<div><span class="t">${clock(l.at)}</span> <span class="t">${l.direction === 'in' ? '←' : '→'}</span> <span class="oc ${esc(l.outcome)}">${esc(l.outcome)}</span>${esc(l.connector)} <span class="t">${esc(l.detail)}</span></div>`).join('')
+    : '<div class="empty">Nothing has crossed the edge yet.</div>';
+  document.getElementById('providers').innerHTML = cx.providers
+    .map((p) => `<div class="prov"><b>${esc(p.name)}</b> <span class="t">${p.received} received${p.duplicates ? `, ${p.duplicates} recognised as duplicates` : ''}</span>${p.down ? ' <span class="bad">DOWN</span>' : ''}
+      ${p.recent.slice().reverse().map((r) => `<code>${r.duplicate ? '(duplicate) ' : ''}${esc(r.path)} ${esc(JSON.stringify(r.body))}</code>`).join('')}</div>`)
+    .join('') + (cx.quarantine.length ? `<div class="prov"><b class="bad">Quarantined webhooks</b>${cx.quarantine.map((q) => `<code>${esc(q.eventId)} for ${esc(q.clientReference)}: ${esc(q.reason)}</code>`).join('')}</div>` : '');
 
   document.getElementById('outbox').textContent = s.outboxPending ? `· ${s.outboxPending} unsent in outbox` : '';
   document.getElementById('queues').innerHTML =

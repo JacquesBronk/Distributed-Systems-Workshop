@@ -35,11 +35,16 @@ function reset() {
   push();
 }
 
-const FAULT_KEYS: (keyof Faults)[] = ['outboxEnabled', 'repairDown', 'paymentsIdempotent', 'crashNextCommit', 'relayCrashOnce', 'repairDelayMs', 'assessmentDelayMs'];
+const FAULT_KEYS: (keyof Faults)[] = ['outboxEnabled', 'repairDown', 'paymentsIdempotent', 'crashNextCommit', 'relayCrashOnce', 'repairDelayMs', 'assessmentDelayMs', 'garageDown', 'reinsurerDown', 'garageDuplicateWebhooks', 'garageCorruptSignatureOnce'];
 
-async function body(req: IncomingMessage): Promise<any> {
+async function rawBody(req: IncomingMessage): Promise<string> {
   let raw = '';
   for await (const chunk of req) raw += chunk;
+  return raw;
+}
+
+async function body(req: IncomingMessage): Promise<any> {
+  const raw = await rawBody(req);
   return raw ? JSON.parse(raw) : {};
 }
 
@@ -68,6 +73,12 @@ createServer(async (req, res) => {
     }
 
     if (req.method !== 'POST') return json(res, 404, { error: 'not found' });
+
+    // The inbound connector's front door. The signature is computed over the RAW bytes, so don't parse first.
+    if (url.pathname === '/webhooks/garage') {
+      const result = sys.receiveGarageWebhook(await rawBody(req), { 'x-timestamp': req.headers['x-timestamp'] as string | undefined, 'x-signature': req.headers['x-signature'] as string | undefined });
+      return json(res, result.status, result.body);
+    }
     const b = await body(req);
 
     if (url.pathname === '/api/claims') {
@@ -95,6 +106,11 @@ createServer(async (req, res) => {
       const target = allowed[b.type];
       if (!target) return json(res, 400, { error: 'type must be PaymentSettled or SettlePayment' });
       sys.duplicateNext(...target);
+      return json(res, 202, { ok: true });
+    }
+    if (url.pathname === '/api/inject/webhook') {
+      if (b.kind !== 'unknown-job' && b.kind !== 'malformed') return json(res, 400, { error: 'kind must be unknown-job or malformed' });
+      sys.sendStrayWebhook(b.kind);
       return json(res, 202, { ok: true });
     }
     if (url.pathname === '/api/dlq/replay') return json(res, 200, { ok: sys.broker.replay(b.endpoint, b.id, b.body) });

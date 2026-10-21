@@ -60,8 +60,8 @@ export class RepairService {
     this.outbox = new Outbox(this.db, broker, f);
   }
 
-  private emit(cause: Message, type: string) {
-    this.outbox.add(`topic:${CLAIM_EVENTS}`, newMessage('event', type, { claimId: cause.correlationId }, cause.correlationId, cause.id));
+  private emit(cause: Message, type: string, extra: Record<string, unknown> = {}) {
+    this.outbox.add(`topic:${CLAIM_EVENTS}`, newMessage('event', type, { claimId: cause.correlationId, ...extra }, cause.correlationId, cause.id));
   }
 
   book = async (msg: Message) => {
@@ -72,15 +72,10 @@ export class RepairService {
     tx(this.db, () => {
       // Naturally idempotent: one booking per claim, however many times the command arrives.
       this.db.prepare("INSERT INTO bookings (claim_id, status) VALUES (?, 'booked') ON CONFLICT(claim_id) DO NOTHING").run(claimId);
-      this.emit(msg, 'RepairBooked');
+      // The event carries what a garage needs to do the job. Dispatching it is the outbound connector's business;
+      // the completion comes back later, through the inbound connector, in our vocabulary.
+      this.emit(msg, 'RepairBooked', { description: msg.body.description, customer: msg.body.customer });
     });
-    // The repair itself takes a while. (A timer stands in for the garage; it would not survive a real restart.)
-    setTimeout(() => {
-      tx(this.db, () => {
-        const res = this.db.prepare("UPDATE bookings SET status = 'completed' WHERE claim_id = ? AND status = 'booked'").run(claimId);
-        if (res.changes === 1) this.emit(msg, 'RepairCompleted');
-      });
-    }, this.t.repairDurationMs);
   };
 
   /** The saga's compensating action: a business operation that can be retried safely. */

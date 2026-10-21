@@ -11,6 +11,8 @@ export interface Timing {
   maxResends: number; // timeouts resend the command this often before escalating
   repairDurationMs: number;
   fraudReviewMs: number;
+  breakerThreshold: number; // outbound connectors: consecutive failures before the circuit opens
+  breakerCooldownMs: number; // ...and how long before one probe call is allowed
 }
 
 export const LIVE: Timing = {
@@ -31,6 +33,8 @@ export const LIVE: Timing = {
   maxResends: 2,
   repairDurationMs: 6000,
   fraudReviewMs: 5000,
+  breakerThreshold: 3,
+  breakerCooldownMs: 5000,
 };
 
 // Same behaviour, compressed so the test suite runs in seconds.
@@ -52,4 +56,6 @@ export const FAST: Timing = {
   maxResends: 2,
   repairDurationMs: 60,
   fraudReviewMs: 40,
+  breakerThreshold: 3,
+  breakerCooldownMs: 30,
 };

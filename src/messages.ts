@@ -38,6 +38,8 @@ export const SUBSCRIPTIONS = {
   orchestrator: 'orchestrator',
   notifications: 'notifications',
   audit: 'audit',
+  garageDispatch: 'garage-dispatch',
+  partnerReporting: 'partner-reporting',
 } as const;
 
 export interface ClaimInput {

@@ -31,7 +31,7 @@ export function consume(
       d.complete();
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
-      if (err instanceof Defer) return d.abandon(err.delayMs);
+      if (err instanceof Defer) return d.abandon(err.delayMs, { refund: true }); // "not yet" is not a failed attempt
       const n = d.deliveryCount;
       if (n >= timing.maxDeliveries) return d.deadLetter(`${reason} (after ${n} deliveries)`);
       if (n <= timing.immediateRetries) return d.abandon(0);

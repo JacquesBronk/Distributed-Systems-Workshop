@@ -8,7 +8,7 @@ claim sticks, an outbox row saves the day.
 ```
 npm install        # only TypeScript + Node types, for the typecheck. Nothing is needed at runtime.
 npm start          # http://localhost:3000
-npm test           # 35 tests: one or more per box on the slides, Round 2 cards A to F included
+npm test           # 51 tests: one or more per box on the slides, Round 2 cards A to F and the connectors included
 npm run typecheck
 ```
 
@@ -32,6 +32,56 @@ no broker to install, no build step.
 Every arrow goes through the broker. Nothing calls anything directly. The dashboard is a *query*
 (HTTP reads of the orchestrator's state history and the broker's stats); it never goes over the bus.
 
+## The edge: inbound and outbound connectors
+
+Everything above is *inside* the system. Real systems also talk to providers they don't own: they send
+webhooks in their own format, with their own ids, and they go down. Connectors are the two doors where
+that outside world meets the bus, and the demo has a worked example of each, around the repair garage.
+
+```
+ garage network (external)                          our system                              partners (external)
+ ─────────────────────────                 ────────────────────────────────────           ─────────────────────
+                      ┌─ job.completed ──▶ INBOUND connector ──▶ RepairCompleted ──▶ [bus] ──▶ orchestrator
+  signed webhook ─────┘                    verify · validate · de-dup · translate · outbox
+                                                                                              OUTBOUND connectors
+  POST /jobs ◀─────── transform ◀── rules ◀──── subscription ◀── RepairBooked ◀─── [bus]      rules · transform ·
+                                                                                              idempotency key ·
+  reinsurer ◀──────── transform ◀── rules ◀──── subscription ◀── ClaimClosed ◀──── [bus]      retry · breaker · DLQ
+  fraud bureau ◀───── transform ◀── rules ◀──── subscription ◀── ClaimRejected ◀── [bus]
+```
+
+![The connector log and what the outside world received: accepted, duplicate and quarantined webhooks, a skipped report, an open circuit](docs/connectors.png)
+
+**Inbound** (`src/connectors/inbound.ts`) is an anti-corruption layer. Nothing the provider sends reaches the
+bus until it has been:
+
+1. **authenticated**: HMAC over `timestamp.body`, constant-time compare, 5 minute window against replay
+2. **validated** at the edge, so a malformed payload is refused with a 400/422 and never becomes a poison message
+3. **de-duplicated** on the *provider's* event id (providers redeliver), in the same transaction as the outbox write
+4. **translated** into our vocabulary (`job.completed` becomes `RepairCompleted`). The internal MessageId is derived
+   from the provider's event id, so identity stays stable. The orchestrator never learns a garage exists
+5. **saved and acknowledged**: inbox row and outbox row in one transaction, then a fast `202`
+
+A webhook for a job we never dispatched is **quarantined**, not guessed at and not dropped.
+
+**Outbound** (`src/connectors/outbound.ts`) is an ordinary consumer with its own subscription and DLQ, plus:
+
+- **Rules**: first match wins. `send` rules name a target and a transform; `skip` rules say *why* a message goes nowhere.
+  Every decision is logged with the rule that made it. See `reportingRules` in `src/system.ts`:
+  confirmed fraud goes to the fraud bureau, closed claims of £5,000 or more go to the reinsurer, small and
+  cancelled claims are skipped.
+- **Transform**: the partner gets its own shape (`paid_pence`, `case_ref`) and only the fields it is entitled to.
+  This is why events carry enough context (`amount`): the rules need it without calling back.
+- **Idempotency key = business operation** (`closed:CLM-0007`), *not* the message id, so a resend after a timeout is
+  still recognised by the partner as the same operation.
+- **Circuit breaker** per partner: after repeated failures we stop calling, hold the message without spending its retry
+  budget, and probe again after a cooldown. A dead partner backs up *its* queue and nothing else.
+- Retry, backoff and the DLQ come from the same ladder as every other consumer, and replay works the same way.
+
+The garage and the partners are simulated (`src/connectors/external.ts`): they go down, de-duplicate on the key
+we send, and the garage calls back with signed webhooks, retries rejected ones, and can be told to send duplicates.
+The webhook is also a real route: `POST /webhooks/garage`.
+
 ## Slide to code
 
 | Slide | Where to look |
@@ -48,6 +98,7 @@ Every arrow goes through the broker. Nothing calls anything directly. The dashbo
 | **Idempotency, correlation, ordering** (17) | Inbox + natural key in payments; `ClaimId` as `correlationId` on every message; `version` check in the `UPDATE ... WHERE version = ?`; the `Assessing` join accepts either order |
 | **Failure handling** (18) | `consume()`: immediate retry, delayed redelivery with backoff, DLQ. State timeouts in `onTimeout()`. Replay tool in the dashboard |
 | **Observability** (19) | `history` table (every transition: from, to, event, time, note), message flow log, queue depth + oldest age + DLQ count on the dashboard |
+| **Connectors: the edge of the bus** | `src/connectors/`: inbound anti-corruption layer, outbound rules, breaker, idempotency keys (see above) |
 | **Events are a public API** (20) | Event bodies carry the facts consumers need (`claimId`, plus `reason`, `state`), not database rows |
 
 ## Running the exercise
@@ -70,6 +121,18 @@ compare with the one here.
 | **E** crash before publish | *Crash orchestrator on next commit*, submit | With the outbox: a retry, then it carries on | Transactional outbox |
 | **E** (the sting) | Untick *Transactional outbox*, crash, submit | **The claim sits in `Assessing` forever.** No error, no DLQ, no escalation | The dual-write problem |
 | **F** cancel mid-booking | Tick *Slow repair booking*, submit, press **Cancel** while `Approved` | `Cancelling`: the cancel is recorded, the booking lands, the compensation runs, then `Cancelled` | Saga compensation |
+
+And for the connectors (the *Connectors: the edge* panel):
+
+| Do this | What happens | Pattern |
+|---|---|---|
+| Submit a £6,500 claim, then a £2,400 one | The first is reported to the reinsurer in the reinsurer's format; the second shows `skipped ... [small-claims]` in the connector log | Rules and transform |
+| *Garage sends every webhook twice* | `accepted` then `duplicate` in the log; one `RepairCompleted`, one payment | Inbound de-duplication on the provider id |
+| *Next webhook: bad signature* | `rejected 401`, then the provider's retry is `accepted` | Authenticate at the edge |
+| *Malformed webhook* / *Webhook for unknown job* | `400` and nothing on the bus / the event sits in **Quarantined webhooks** | Validate at the edge; quarantine, don't guess |
+| *Reinsurer API down*, close a £6,500 claim | The claim still closes. The reinsurer circuit goes **open**; the report waits; untick it and the report goes out | Circuit breaker; decoupling |
+| Leave it down for ~15 s | The report is dead-lettered. Untick, *Replay as is*: delivered once | DLQ + replay + idempotency key |
+| *Garage API down*, submit | The dispatch retries with backoff and the repair happens when it returns | Outbound retry |
 
 The facilitator question from the slides works here too: *"what happens if that event never arrives?"*
 Pause the room on the E (sting) claim and ask how they would have found out.
@@ -101,8 +164,9 @@ demo hand-rolls them in TypeScript so each moving part is visible rather than co
 
 ## Things that are simulated, on purpose
 
-- The fraud analyst's verdict, and the garage finishing the repair, are `setTimeout`s inside the
-  services. A real system would use a work queue and a webhook; those timers would not survive a restart.
+- The fraud analyst's verdict is a `setTimeout` inside the fraud service. A real system would use a work queue; that
+  timer would not survive a restart. The garage, reinsurer and fraud bureau are in-process stand-ins for external APIs;
+  the webhook route is real HTTP, the outbound calls are function calls.
 - The `scenario` dropdowns on a claim (assessment passes or fails; fraud found or not) steer each
   claim down a particular path so a room can see every branch. Real services would decide from the data.
 - Everything runs in one process for the demo; the components only communicate through the broker, so
@@ -122,8 +186,12 @@ src/
     machine.ts             the pure state machine
     orchestrator.ts        the runtime loop around it
   services/services.ts     assessment, fraud, repair booking, payments, notifications, audit
+  connectors/
+    inbound.ts             the garage webhook: verify, validate, de-duplicate, translate, outbox
+    outbound.ts            rules, transform, idempotency key, circuit breaker
+    external.ts            simulated garage, reinsurer and fraud bureau; HMAC signing
   system.ts                wiring, fault switches, intake API, snapshot
   server.ts                dashboard + control API
 public/index.html          the dashboard
-test/                      machine.test.ts (pure) and scenarios.test.ts (rounds 1 and 2)
+test/                      machine.test.ts (pure), scenarios.test.ts (rounds 1 and 2), connectors.test.ts (the edge)
 ```

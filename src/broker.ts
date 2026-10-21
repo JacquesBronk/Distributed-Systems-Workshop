@@ -10,7 +10,7 @@ export interface Delivery {
   msg: Message;
   deliveryCount: number; // 1 on first delivery
   complete(): void; // ack: remove for good
-  abandon(delayMs?: number): void; // give it back, optionally not before delayMs (scheduled redelivery)
+  abandon(delayMs?: number, opts?: { refund?: boolean }): void; // give it back, optionally not before delayMs; refund = this wasn't a failed attempt
   deadLetter(reason: string): void; // park it for a human
 }
 
@@ -251,8 +251,9 @@ export class Broker extends EventEmitter {
         }
         this.emit('change');
       },
-      abandon: (delayMs = 0) => {
+      abandon: (delayMs = 0, opts) => {
         if (!live()) return;
+        if (opts?.refund) entry.deliveryCount--;
         entry.lockUntil = 0;
         entry.availableAt = Date.now() + delayMs;
         this.record('abandon', ep.name, entry.msg, delayMs ? `retry in ${delayMs}ms` : 'retry now');

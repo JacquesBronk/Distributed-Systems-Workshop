@@ -96,7 +96,7 @@ const ignore = (reason: string): Outcome => ({ kind: 'ignore', reason });
 const assessCmd = (r: ClaimRecord) =>
   cmd(QUEUES.assessment, 'AssessDamage', { claimId: r.id, amount: r.data.amount, description: r.data.description, outcome: r.data.scenario.assessment });
 const fraudCmd = (r: ClaimRecord) => cmd(QUEUES.fraud, 'CheckFraud', { claimId: r.id, amount: r.data.amount, outcome: r.data.scenario.fraud });
-const bookCmd = (r: ClaimRecord) => cmd(QUEUES.repairs, 'BookRepair', { claimId: r.id });
+const bookCmd = (r: ClaimRecord) => cmd(QUEUES.repairs, 'BookRepair', { claimId: r.id, description: r.data.description, customer: r.data.customer });
 const cancelBookingCmd = (r: ClaimRecord) => cmd(QUEUES.repairs, 'CancelRepairBooking', { claimId: r.id });
 const payCmd = (r: ClaimRecord) => cmd(QUEUES.payments, 'SettlePayment', { claimId: r.id, amount: r.data.amount });
 
@@ -120,9 +120,9 @@ function go(r: ClaimRecord, to: State, cfg: MachineConfig, out: Out[] = [], patc
 const stay = (r: ClaimRecord, patch: Partial<ClaimData>, note: string): Outcome => ({ kind: 'transition', to: r.state, data: patch, out: [], note });
 
 const approve = (r: ClaimRecord, cfg: MachineConfig, patch: Partial<ClaimData>): Outcome =>
-  go(r, 'Approved', cfg, [bookCmd(r), evt('ClaimApproved', { claimId: r.id })], patch);
+  go(r, 'Approved', cfg, [bookCmd(r), evt('ClaimApproved', { claimId: r.id, amount: r.data.amount })], patch);
 const reject = (r: ClaimRecord, cfg: MachineConfig, reason: string): Outcome =>
-  go(r, 'Rejected', cfg, [evt('ClaimRejected', { claimId: r.id, reason })], { reason });
+  go(r, 'Rejected', cfg, [evt('ClaimRejected', { claimId: r.id, reason, amount: r.data.amount })], { reason });
 const cancelled = (r: ClaimRecord, cfg: MachineConfig): Outcome => go(r, 'Cancelled', cfg, [evt('ClaimCancelled', { claimId: r.id })]);
 
 export function decide(r: ClaimRecord | null, ev: Message, cfg: MachineConfig): Outcome {
@@ -195,7 +195,7 @@ export function decide(r: ClaimRecord | null, ev: Message, cfg: MachineConfig): 
       return ignore(`${ev.type} not expected in RepairScheduled`);
 
     case 'Paying':
-      if (ev.type === 'PaymentSettled') return go(r, 'Closed', cfg, [evt('ClaimClosed', { claimId: r.id })]);
+      if (ev.type === 'PaymentSettled') return go(r, 'Closed', cfg, [evt('ClaimClosed', { claimId: r.id, amount: r.data.amount })]);
       if (ev.type === 'CancellationRequested') return ignore('too late to cancel: the repair is complete');
       return ignore(`${ev.type} not expected in Paying`);
 
