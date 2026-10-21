@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claims demo: event-driven distributed systems</title>
+<style>
+  :root {
+    --ink: #0034BC; --accent: #004ACC; --sky: #00A5FF; --muted: #4A5578; --line: #C9D3EA; --wash: #F3F6FC; --card: #FFFFFF;
+    --good: #0B7A4B; --bad: #B3261E; --warn: #8A5A00; --warn-bg: #FFF4D6; --bad-bg: #FDE7E5; --good-bg: #DFF5EA;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--wash); color: #14213D; font: 15px/1.45 "Barlow", "Segoe UI", system-ui, sans-serif; }
+  header { background: var(--ink); color: #fff; padding: 14px 24px; display: flex; align-items: center; gap: 16px; }
+  header h1 { font: 300 24px "Exo 2", "Segoe UI", system-ui, sans-serif; margin: 0; flex: 1; }
+  header small { opacity: .75; }
+  main { display: grid; grid-template-columns: 340px minmax(380px, 1fr) 460px; gap: 16px; padding: 16px 24px; align-items: start; }
+  @media (max-width: 1250px) { main { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  h2 { font: 600 12px "Barlow", system-ui, sans-serif; letter-spacing: 2px; text-transform: uppercase; color: var(--accent); margin: 0 0 12px; }
+  h3 { font-size: 14px; margin: 0 0 6px; color: var(--ink); }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 2px; }
+  input, select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 7px 12px; background: var(--ink); color: #fff; cursor: pointer; }
+  button.ghost { background: var(--wash); color: var(--ink); border: 1px solid var(--line); }
+  button.small { padding: 3px 9px; font-size: 13px; }
+  button:hover { filter: brightness(1.12); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .card { border-top: 1px solid var(--line); padding: 10px 0 2px; margin-top: 10px; }
+  .card:first-of-type { border-top: 0; margin-top: 0; padding-top: 0; }
+  .toggle { display: flex; gap: 8px; align-items: center; font-size: 14px; margin: 4px 0; cursor: pointer; }
+  .toggle input { width: auto; }
+  .hint { font-size: 12.5px; color: var(--muted); margin: 2px 0 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 3px 6px; }
+  td { padding: 3px 6px; border-top: 1px solid var(--line); }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; background: var(--wash); border: 1px solid var(--line); color: var(--ink); }
+  .pill.Closed { background: var(--good-bg); color: var(--good); border-color: #A7DCC3; }
+  .pill.Rejected, .pill.Cancelled { background: #ECEEF4; color: var(--muted); }
+  .pill.Cancelling { background: var(--warn-bg); color: var(--warn); border-color: #EBCF8B; }
+  .pill.FraudReview { background: #EAE6FF; color: #4B2FB5; border-color: #CFC6FA; }
+  .flag { font-size: 12px; font-weight: 600; padding: 1px 7px; border-radius: 6px; margin-left: 4px; }
+  .flag.bad { background: var(--bad-bg); color: var(--bad); }
+  .flag.warn { background: var(--warn-bg); color: var(--warn); }
+  .claim { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; }
+  .claim.escalated { border-color: var(--bad); background: #FFFAF9; }
+  .claim .top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .claim .id { font-weight: 700; color: var(--ink); }
+  .claim .meta { color: var(--muted); font-size: 13px; flex: 1; }
+  .track { display: flex; gap: 3px; margin: 8px 0 4px; }
+  .track span { flex: 1; height: 6px; border-radius: 3px; background: var(--line); }
+  .track span.done { background: var(--sky); }
+  .track span.now { background: var(--ink); }
+  details summary { cursor: pointer; font-size: 13px; color: var(--accent); }
+  ol.hist { margin: 6px 0 2px; padding-left: 20px; font-size: 13px; }
+  ol.hist li { margin: 1px 0; }
+  ol.hist .ignored { color: var(--muted); }
+  .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .log { max-height: 340px; overflow: auto; font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .log div { white-space: nowrap; }
+  .op { display: inline-block; width: 84px; font-weight: 700; }
+  .op.publish, .op.send { color: var(--accent); } .op.deliver { color: var(--muted); } .op.complete { color: var(--good); }
+  .op.abandon, .op.lock-expired { color: var(--warn); } .op.dead-letter, .op.handler-error { color: var(--bad); }
+  .op.duplicate, .op.replay { color: #7A2FB5; }
+  .bad { color: var(--bad); font-weight: 600; }
+  .dl { border: 1px solid #EBB5B0; background: var(--bad-bg); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; font-size: 13px; }
+  .empty { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Motor claims: event-driven demo</h1>
+  <small id="status">connecting...</small>
+  <button class="ghost" onclick="post('/api/reset')">Reset everything</button>
+</header>
+
+<main>
+  <div>
+    <section>
+      <h2>Submit a claim</h2>
+      <label>Amount (£)</label><input id="amount" type="number" value="2400" min="0">
+      <label>Assessment will</label>
+      <select id="assessment"><option value="pass">pass</option><option value="fail">fail</option></select>
+      <label>Fraud check will</label>
+      <select id="fraud">
+        <option value="none">find nothing</option>
+        <option value="review-clear">suspect, then clear after review</option>
+        <option value="review-confirm">suspect, then confirm fraud</option>
+      </select>
+      <div class="row" style="margin-top:12px">
+        <button onclick="submitClaim(1)">Submit claim</button>
+        <button class="ghost" onclick="submitClaim(5)">Submit 5</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Round 2: break it</h2>
+      <div class="card"><h3>A · PaymentSettled arrives twice</h3>
+        <div class="row">
+          <button class="ghost small" onclick="post('/api/inject/duplicate',{type:'PaymentSettled'})">Duplicate next PaymentSettled</button>
+          <button class="ghost small" onclick="post('/api/inject/duplicate',{type:'SettlePayment'})">Duplicate next SettlePayment</button>
+        </div>
+        <label class="toggle"><input type="checkbox" data-fault="paymentsIdempotent"> Payments is idempotent</label>
+        <div class="hint">Untick it, duplicate a SettlePayment, and watch the ledger.</div>
+      </div>
+      <div class="card"><h3>B · FraudCleared arrives before the assessment</h3>
+        <label class="toggle"><input type="checkbox" data-fault="assessmentDelayMs" data-on="4000" data-off="0"> Slow assessment (+4s)</label>
+      </div>
+      <div class="card"><h3>C · Repair booking is down</h3>
+        <label class="toggle"><input type="checkbox" data-fault="repairDown"> Repair provider down</label>
+        <div class="hint">Short outage: backoff absorbs it. Long: DLQ, then the state's timeout, then escalation.</div>
+      </div>
+      <div class="card"><h3>D · A malformed message lands in payments</h3>
+        <button class="ghost small" onclick="post('/api/inject/poison')">Inject poison message</button>
+      </div>
+      <div class="card"><h3>E · Crash after saving state, before publishing</h3>
+        <div class="row">
+          <button class="ghost small" onclick="setFault('crashNextCommit',true)">Crash orchestrator on next commit</button>
+          <button class="ghost small" onclick="setFault('relayCrashOnce',true)">Crash the relay once</button>
+        </div>
+        <label class="toggle"><input type="checkbox" data-fault="outboxEnabled"> Transactional outbox</label>
+        <div class="hint">Untick the outbox, crash, submit a claim: it is stuck and nothing says so.</div>
+      </div>
+      <div class="card"><h3>F · Customer cancels during booking</h3>
+        <label class="toggle"><input type="checkbox" data-fault="repairDelayMs" data-on="5000" data-off="0"> Slow repair booking (+5s)</label>
+        <div class="hint">Submit, then press Cancel on the claim while it is Approved.</div>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Claims <span class="t" id="claim-count"></span></h2>
+      <div id="claims"><div class="empty">No claims yet. Submit one.</div></div>
+    </section>
+    <section>
+      <h2>Payments ledger</h2><div id="ledger"></div>
+    </section>
+    <section>
+      <h2>Notifications (choreographed)</h2><div id="notifications"></div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>Broker <span class="t" id="outbox"></span></h2>
+      <table id="queues"></table>
+      <div class="hint" style="margin-top:8px">Ready = waiting now · Sched = delayed redelivery or timeout · Fly = locked by a handler</div>
+    </section>
+    <section id="dlq-section" hidden>
+      <h2>Dead-letter queues</h2><div id="dlq"></div>
+    </section>
+    <section>
+      <h2>Message flow</h2>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+</main>
+
+<script>
+const STATES = ['Assessing', 'FraudReview', 'Approved', 'RepairScheduled', 'Paying', 'Closed'];
+const TERMINAL = ['Closed', 'Rejected', 'Cancelled'];
+const open = new Set();
+let snap = null;
+
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const clock = (t) => new Date(t).toLocaleTimeString([], { hour12: false }) + '.' + String(t % 1000).padStart(3, '0');
+const age = (ms) => (ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(1) + 's');
+
+async function post(url, body) {
+  await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}) });
+}
+const setFault = (name, value) => post('/api/faults', { name, value });
+
+async function submitClaim(n) {
+  for (let i = 0; i < n; i++) {
+    await post('/api/claims', {
+      amount: Number(document.getElementById('amount').value),
+      scenario: { assessment: document.getElementById('assessment').value, fraud: document.getElementById('fraud').value },
+    });
+  }
+}
+
+document.querySelectorAll('[data-fault]').forEach((el) =>
+  el.addEventListener('change', () => {
+    const on = el.dataset.on !== undefined ? Number(el.dataset.on) : true;
+    const off = el.dataset.off !== undefined ? Number(el.dataset.off) : false;
+    setFault(el.dataset.fault, el.checked ? on : off);
+  }),
+);
+
+function render(s) {
+  snap = s;
+  document.getElementById('status').textContent = 'live · ' + clock(s.now);
+
+  for (const el of document.querySelectorAll('[data-fault]')) {
+    const v = s.faults[el.dataset.fault];
+    el.checked = el.dataset.on !== undefined ? v === Number(el.dataset.on) : !!v;
+  }
+
+  document.getElementById('claim-count').textContent = s.claims.length ? `(${s.claims.length})` : '';
+  document.getElementById('claims').innerHTML = s.claims.length ? s.claims.map(claimCard).join('') : '<div class="empty">No claims yet. Submit one.</div>';
+
+  document.getElementById('ledger').innerHTML = s.payments.length
+    ? '<table><tr><th>Claim</th><th class="n">Amount</th><th>When</th></tr>' +
+      s.payments.map((p) => `<tr class="${s.payments.filter((q) => q.claimId === p.claimId).length > 1 ? 'bad' : ''}"><td>${esc(p.claimId)}</td><td class="n">£${p.amount.toFixed(2)}</td><td class="t">${clock(p.at)}</td></tr>`).join('') +
+      '</table>'
+    : '<div class="empty">Nothing paid yet.</div>';
+  const dupes = new Set(s.payments.map((p) => p.claimId).filter((c, i, a) => a.indexOf(c) !== i));
+  if (dupes.size) document.getElementById('ledger').insertAdjacentHTML('afterbegin', `<div class="bad" style="margin-bottom:6px">Paid twice: ${[...dupes].map(esc).join(', ')}</div>`);
+
+  document.getElementById('notifications').innerHTML = s.notifications.length
+    ? s.notifications.slice().reverse().map((n) => `<div style="margin:3px 0"><span class="t">${clock(n.at)}</span> <b>${esc(n.claimId)}</b> ${esc(n.text)}</div>`).join('')
+    : '<div class="empty">No emails sent.</div>';
+
+  document.getElementById('outbox').textContent = s.outboxPending ? `· ${s.outboxPending} unsent in outbox` : '';
+  document.getElementById('queues').innerHTML =
+    '<tr><th>Endpoint</th><th class="n">Ready</th><th class="n">Sched</th><th class="n">Fly</th><th class="n">DLQ</th><th class="n">Oldest</th></tr>' +
+    s.queues.map((q) => `<tr><td>${esc(q.name)} <span class="t">${q.kind === 'subscription' ? 'sub' : 'queue'}</span></td>
+      <td class="n">${q.ready}</td><td class="n">${q.scheduled}</td><td class="n">${q.inFlight}</td>
+      <td class="n ${q.deadLettered ? 'bad' : ''}">${q.deadLettered}</td><td class="n">${q.oldestAgeMs ? age(q.oldestAgeMs) : '·'}</td></tr>`).join('');
+
+  document.getElementById('dlq-section').hidden = !s.deadLetters.length;
+  document.getElementById('dlq').innerHTML = s.deadLetters
+    .map((d) => `<div class="dl"><b>${esc(d.type)}</b> in <b>${esc(d.endpoint)}</b> <span class="t">${esc(d.claimId)}</span><br>${esc(d.reason)}<br>
+      <code>${esc(JSON.stringify(d.body))}</code><div class="row" style="margin-top:6px">
+      <button class="small" onclick="post('/api/dlq/replay',{endpoint:'${esc(d.endpoint)}',id:'${esc(d.id)}'})">Replay as is</button>
+      <button class="ghost small" onclick="post('/api/dlq/discard',{endpoint:'${esc(d.endpoint)}',id:'${esc(d.id)}'})">Discard</button></div></div>`)
+    .join('');
+
+  document.getElementById('log').innerHTML = s.log
+    .slice()
+    .reverse()
+    .map((l) => `<div><span class="t">${clock(l.t)}</span> <span class="op ${esc(l.op)}">${esc(l.op)}</span>${esc(l.endpoint)} · ${esc(l.type)} <span class="t">${esc(l.claimId)}${l.note ? ' · ' + esc(l.note) : ''}</span></div>`)
+    .join('');
+}
+
+function claimCard(c) {
+  const idx = STATES.indexOf(c.state);
+  const track = STATES.map((st, i) => `<span class="${st === c.state ? 'now' : i < idx || (c.state === 'Closed') ? 'done' : ''}" title="${st}"></span>`).join('');
+  const flags =
+    (c.data.escalated ? '<span class="flag bad">needs a human</span>' : '') +
+    (c.data.cancelRequested ? '<span class="flag warn">cancel requested</span>' : '') +
+    (c.data.attempts ? `<span class="flag warn">resent ×${c.data.attempts}</span>` : '');
+  const hist = c.history
+    .map((h) => `<li class="${h.note && h.note.startsWith('ignored') ? 'ignored' : ''}"><span class="t">${clock(h.at)}</span> <b>${esc(h.event)}</b>${h.from !== h.to ? ` · ${esc(h.from)} → <b>${esc(h.to)}</b>` : ''}${h.note ? ` <span class="t">(${esc(h.note)})</span>` : ''}</li>`)
+    .join('');
+  const isOpen = open.has(c.id) ? 'open' : '';
+  return `<div class="claim ${c.data.escalated ? 'escalated' : ''}">
+    <div class="top"><span class="id">${esc(c.id)}</span><span class="pill ${c.state}">${c.state}</span>${flags}
+      <span class="meta">£${c.data.amount} · v${c.version}</span>
+      ${TERMINAL.includes(c.state) ? '' : `<button class="ghost small" onclick="post('/api/claims/${esc(c.id)}/cancel')">Cancel</button>`}</div>
+    <div class="track">${track}</div>
+    <details ${isOpen} ontoggle="this.open ? open.add('${esc(c.id)}') : open.delete('${esc(c.id)}')"><summary>State history (${c.history.length})</summary><ol class="hist">${hist}</ol></details>
+  </div>`;
+}
+
+const es = new EventSource('/api/events');
+es.onmessage = (e) => render(JSON.parse(e.data));
+es.onerror = () => (document.getElementById('status').textContent = 'disconnected, retrying...');
+</script>
+</body>
+</html>

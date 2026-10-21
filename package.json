@@ -1,0 +1,17 @@
+{
+  "name": "distributed-systems-workshop",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Runnable demo for the 'Event-driven distributed systems' workshop: a motor-claim orchestrator, broker, outbox/inbox, sagas and fault injection.",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node --no-warnings src/server.ts",
+    "test": "node --no-warnings --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  }
+}
