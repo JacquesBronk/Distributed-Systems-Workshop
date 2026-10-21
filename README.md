@@ -15,6 +15,8 @@ npm run typecheck
 Needs **Node 22.18+** (it runs the TypeScript directly and uses the built-in `node:sqlite`). No Docker,
 no broker to install, no build step.
 
+![The demo dashboard: claims and their state, broker queue depths, a dead-lettered message, the payments ledger](docs/dashboard.png)
+
 ## What you are looking at
 
 ```
